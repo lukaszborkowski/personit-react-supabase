@@ -1,0 +1,80 @@
+# Struktura folderów
+
+## Folder `src/`
+
+```text
+src/
+├─ app/                 # spina aplikację – zawsze obecny
+├─ modules/             # moduły domenowe
+│  ├─ auth/
+│  └─ orders/
+└─ shared/              # kod wspólny, bez logiki domenowej
+   ├─ components/       # własne komponenty wspólne
+   ├─ hooks/            # hooki niezwiązane z domeną
+   ├─ lib/              # klient Supabase, queryClient, utils
+   ├─ store/            # stan UI (zustand) – bez danych z bazy
+   └─ ui/               # shadcn/ui
+```
+
+## Folder `app`
+
+```text
+app/
+├─ layout/              # powłoka aplikacji
+│  ├─ AppShell.tsx
+│  ├─ Navigation.tsx
+│  └─ Sidebar.tsx
+├─ pages/               # strony niezwiązane z modułem
+│  └─ NotFoundPage.tsx
+├─ providers/           # providery całej aplikacji
+│  ├─ AppProviders.tsx
+│  ├─ AuthProvider.tsx
+│  ├─ QueryProvider.tsx
+│  └─ ThemeProvider.tsx
+├─ router/              # trasy i ścieżki
+│  ├─ AppRoutes.tsx
+│  ├─ paths.ts
+│  └─ RequireAuth.tsx
+├─ App.tsx              # providery + router
+└─ main.tsx             # punkt wejścia
+```
+
+## Struktura modułu
+
+```text
+modules/orders/
+├─ api/                 # funkcje async wołające Supabase
+│  └─ orders.api.ts
+├─ components/          # komponenty tylko tego modułu
+│  └─ OrderCard.tsx
+├─ mutations/           # hooki zapisu – jeden na akcję
+│  └─ useCreateOrder.ts
+├─ pages/               # ekrany podpinane w routerze
+│  └─ OrdersPage.tsx
+├─ queries/             # klucze i hooki odczytu
+│  ├─ keys.ts
+│  └─ useOrders.ts
+├─ index.ts             # publiczne API modułu
+└─ types.ts             # typy domenowe modułu
+```
+
+## Publiczne API modułu
+
+```ts title="modules/orders/index.ts"
+export { OrdersPage } from './pages/OrdersPage'
+export { useOrders } from './queries/useOrders'
+export type { Order } from './types'
+```
+
+Inne moduły importują tylko z `@/modules/orders`, nigdy z jego wnętrza. Regułę wymusza lint:
+
+```js title="eslint.config.js"
+rules: {
+  'no-restricted-imports': ['error', {
+    patterns: [{
+      group: ['@/modules/*/*'],
+      message: 'Importuj z publicznego API modułu: @/modules/<moduł>',
+    }],
+  }],
+}
+```

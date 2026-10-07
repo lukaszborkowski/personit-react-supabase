@@ -1,0 +1,175 @@
+# Dialog
+
+Każdy dialog ma swoje **ID** i jest ustawiony **na poziomie strony** (page). Otwieramy go z dowolnego miejsca przez `useDialog(ID)`.
+
+## Użycie
+
+### 1. Dialog z ID
+
+```tsx title="modules/books/components/AddBookDialog.tsx"
+import { Dialog } from '@/shared/components/dialog'
+import { DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/shared/ui/dialog'
+import { AddBookForm } from './AddBookForm'
+
+export const ADD_BOOK_DIALOG_ID = 'add-book-dialog-id'
+
+export type AddBookPayload = { shelfId: string }
+
+export function AddBookDialog() {
+  return (
+    <Dialog<AddBookPayload> id={ADD_BOOK_DIALOG_ID}>
+      {({ payload, close }) => (
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Dodaj książkę</DialogTitle>
+            <DialogDescription>Książka trafi na wybraną półkę.</DialogDescription>
+          </DialogHeader>
+          <AddBookForm shelfId={payload.shelfId} onDone={close} />
+        </DialogContent>
+      )}
+    </Dialog>
+  )
+}
+```
+
+`Dialog` z `shared/components/dialog` odpowiada tylko za otwieranie i zamykanie po ID. Wygląd składamy w środku z komponentów shadcn: `DialogContent`, `DialogHeader`, `DialogTitle`, `DialogDescription`, `DialogFooter`.
+
+### 2. Dialog w page
+
+```tsx title="modules/books/pages/ShelfPage.tsx"
+export function ShelfPage() {
+  return (
+    <Page>
+      <BookList />
+      {/* … */}
+      <AddBookDialog />
+    </Page>
+  )
+}
+```
+
+### 3. Otwieranie z dowolnego miejsca
+
+```tsx title="modules/books/components/BookList.tsx"
+import { useDialog } from '@/shared/components/dialog'
+import { ADD_BOOK_DIALOG_ID, type AddBookPayload } from './AddBookDialog'
+
+export function BookList({ shelf }: { shelf: Shelf }) {
+  const addBookDialog = useDialog<AddBookPayload>(ADD_BOOK_DIALOG_ID)
+
+  return <Button onClick={() => addBookDialog.open({ shelfId: shelf.id })}>Dodaj książkę</Button>
+}
+```
+
+## Jaki problem rozwiązuje
+
+Mamy tabelę książek. W każdym wierszu jest menu z opcją „Edytuj”, która otwiera dialog edycji. Bez wspólnego mechanizmu są dwa wyjścia i oba są słabe.
+
+**1. Dialog w każdym wierszu.** Przy 100 wierszach mamy 100 instancji dialogu w drzewie.
+
+```tsx
+{books.map((book) => (
+  <TableRow key={book.id}>
+    {/* … */}
+    <RowMenu book={book} />
+    <EditBookDialog book={book} />
+  </TableRow>
+))}
+```
+
+**2. `useState` w rodzicu.** Stan otwarcia i wybrany rekord trzeba przeciągnąć przez propsy od menu w wierszu aż do wspólnego rodzica.
+
+```tsx
+const [editedBook, setEditedBook] = useState<Book | null>(null)
+
+<BooksTable books={books} onEdit={setEditedBook} />
+<EditBookDialog book={editedBook} onClose={() => setEditedBook(null)} />
+```
+
+**Z `useDialog`** dialog jest jeden, na poziomie strony, a menu w wierszu otwiera go samo, z danymi swojego rekordu:
+
+```tsx
+const editBookDialog = useDialog<EditBookPayload>(EDIT_BOOK_DIALOG_ID)
+
+<DropdownMenuItem onClick={() => editBookDialog.open({ bookId: book.id })}>Edytuj</DropdownMenuItem>
+```
+
+Nie trzeba ani kopiować dialogu, ani przekazywać stanu przez komponenty pośrednie.
+
+## Kod źródłowy
+
+```ts title="shared/components/dialog/useDialogStore.ts"
+import { create } from 'zustand'
+
+type DialogState = { isOpen: boolean; payload?: unknown }
+
+type DialogStore = {
+  dialogs: Record<string, DialogState>
+  open: (id: string, payload?: unknown) => void
+  close: (id: string) => void
+}
+
+/** Stan wszystkich dialogów po ID. */
+export const useDialogStore = create<DialogStore>((set) => ({
+  dialogs: {},
+  open: (id, payload) => set((s) => ({ dialogs: { ...s.dialogs, [id]: { isOpen: true, payload } } })),
+  // Payload zostaje po zamknięciu – treść nie znika w trakcie animacji
+  close: (id) => set((s) => ({ dialogs: { ...s.dialogs, [id]: { ...s.dialogs[id], isOpen: false } } })),
+}))
+```
+
+```ts title="shared/components/dialog/useDialog.ts"
+import { useCallback } from 'react'
+import { useDialogStore } from './useDialogStore'
+
+/** Otwieranie, zamykanie i stan dialogu o danym ID – z dowolnego komponentu. */
+export function useDialog<P = void>(id: string) {
+  const isOpen = useDialogStore((s) => s.dialogs[id]?.isOpen ?? false)
+  const payload = useDialogStore((s) => s.dialogs[id]?.payload) as P
+
+  const open = useCallback((payload?: P) => useDialogStore.getState().open(id, payload), [id])
+  const close = useCallback(() => useDialogStore.getState().close(id), [id])
+
+  return { isOpen, payload, open, close }
+}
+```
+
+```tsx title="shared/components/dialog/Dialog.tsx"
+import type { ReactNode } from 'react'
+import { Dialog as DialogRoot } from '@/shared/ui/dialog'
+import { useDialog } from './useDialog'
+import { useDialogStore } from './useDialogStore'
+
+type DialogProps<P> = {
+  id: string
+  children: ReactNode | ((args: { payload: P; close: () => void }) => ReactNode)
+}
+
+/**
+ * Dialog shadcn sterowany przez useDialog(id). Treść (DialogContent, DialogHeader…) podaje użycie.
+ * DialogContent montuje się przy każdym otwarciu, więc formularz w środku startuje od świeżych wartości.
+ */
+export function Dialog<P = void>({ id, children }: DialogProps<P>) {
+  const { isOpen, payload, close } = useDialog<P>(id)
+  // Przed pierwszym otwarciem nie ma payloadu – nie wywołujemy jeszcze funkcji z treścią
+  const wasOpened = useDialogStore((s) => id in s.dialogs)
+
+  return (
+    <DialogRoot open={isOpen} onOpenChange={(open) => !open && close()}>
+      {typeof children === 'function' ? wasOpened && children({ payload, close }) : children}
+    </DialogRoot>
+  )
+}
+```
+
+```ts title="shared/components/dialog/index.ts"
+export { Dialog } from './Dialog'
+export { useDialog } from './useDialog'
+```
+
+## Props
+
+| Prop | Opis |
+| --- | --- |
+| `id` | ID dialogu – po nim działa `useDialog(id)` |
+| `children` | `DialogContent` z treścią albo funkcja `({ payload, close }) => …` |

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Personit Docs – dobre praktyki React + Supabase</title>
+    <script>
+      // Motyw ustawiamy przed renderem, żeby nie mignął jasny ekran
+      try {
+        const t = localStorage.getItem('theme')
+        const dark = t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches
+        document.documentElement.classList.toggle('dark', dark)
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

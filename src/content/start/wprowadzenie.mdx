@@ -1,0 +1,15 @@
+# Dobre praktyki React + Supabase
+
+Zbiór zasad, wzorców i decyzji, które stosujemy w Personit przy aplikacjach frontendowych na **React + Vite** z backendem w **Supabase** (baza Postgres, Auth, Storage, Edge Functions).
+
+## Stos technologiczny
+
+| Obszar | Wybór | Po co |
+| --- | --- | --- |
+| Build | Vite + TypeScript | szybki dev server, prosty build SPA |
+| UI | shadcn/ui (Radix) + Tailwind CSS 4 | komponenty w repozytorium, pełna kontrola nad wyglądem |
+| Routing | React Router | trasy, lazy loading ekranów |
+| Stan serwera | TanStack Query v5 | cache, odświeżanie, mutacje, optymistyczne aktualizacje |
+| Stan UI | zustand | dialogi, szkice, preferencje widoku |
+| Formularze | react-hook-form + zod | walidacja i typy wartości z jednego schematu |
+| Backend | Supabase | Postgres + RLS, Auth, Storage, Edge Functions |

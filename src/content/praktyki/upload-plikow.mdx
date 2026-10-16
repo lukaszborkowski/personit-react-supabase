@@ -2,11 +2,29 @@
 
 Pliki obsługuje jeden moduł – `files`. Udostępnia gotowe pola formularza, które **od razu wysyłają plik do Storage** i zwracają **tylko ID** rekordu z tabeli `files`. Formularz nigdy nie trzyma obiektów `File`, a do bazy domenowej trafiają wyłącznie ID.
 
-```text
-wybór pliku → upload do Storage + wiersz w `files` → pole dostaje ID → formularz wysyła ID → rekord domenowy przypina plik
-```
+## Jak to działa
 
-Pliki, których nic nie przypięło (np. formularz porzucony), usuwa cron po **14 dniach**.
+<Steps>
+  <Step title="Użytkownik wybiera plik">
+    Przeciąga go albo klika w pole, np. `ImageInput`.
+  </Step>
+  <Step title="Plik od razu leci do Storage">
+    Upload startuje w tle, a w tabeli `files` powstaje wiersz z nazwą, typem i rozmiarem. Użytkownik w tym czasie wypełnia resztę formularza.
+  </Step>
+  <Step title="Pole dostaje ID pliku">
+    Formularz trzyma tylko UUID, a nie obiekt `File`.
+  </Step>
+  <Step title="„Zapisz” wysyła same ID">
+    Żądanie to mały JSON. Pliki są już w Storage, więc zapis jest natychmiastowy.
+  </Step>
+  <Step title="Zapis rekordu przypina plik">
+    Trigger w bazie oznacza plik jako używany w tej samej transakcji.
+  </Step>
+</Steps>
+
+<Callout type="info" title="A jeśli formularz zostanie porzucony?">
+  Pliki zostają nieprzypięte i po **14 dniach** usuwa je cron. Nie trzeba niczego obsługiwać w kodzie formularza.
+</Callout>
 
 ## Jaki problem to rozwiązuje
 

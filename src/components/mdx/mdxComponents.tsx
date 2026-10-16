@@ -2,6 +2,7 @@ import type { MDXComponents } from 'mdx/types'
 import { Link } from 'react-router-dom'
 import { Callout } from './Callout'
 import { CodeBlock } from './CodeBlock'
+import { Step, Steps } from './Steps'
 
 export const mdxComponents: MDXComponents = {
   pre: CodeBlock,
@@ -18,4 +19,6 @@ export const mdxComponents: MDXComponents = {
     </div>
   ),
   Callout,
+  Steps,
+  Step,
 }

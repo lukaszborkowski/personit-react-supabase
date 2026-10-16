@@ -98,74 +98,22 @@ Nie trzeba ani kopiować dialogu, ani przekazywać stanu przez komponenty pośre
 
 ## Kod źródłowy
 
-```ts title="shared/components/dialog/useDialogStore.ts"
-import { create } from 'zustand'
+Pełny kod jest w repozytorium [personit-react-supabase-starter](https://github.com/lukaszborkowski-wq/personit-react-supabase-starter).
 
-type DialogState = { isOpen: boolean; payload?: unknown }
+Mechanizm:
 
-type DialogStore = {
-  dialogs: Record<string, DialogState>
-  open: (id: string, payload?: unknown) => void
-  close: (id: string) => void
-}
+- [`shared/components/dialog/Dialog.tsx`](https://github.com/lukaszborkowski-wq/personit-react-supabase-starter/blob/main/src/shared/components/dialog/Dialog.tsx)
+- [`shared/components/dialog/useDialog.ts`](https://github.com/lukaszborkowski-wq/personit-react-supabase-starter/blob/main/src/shared/components/dialog/useDialog.ts)
+- [`shared/components/dialog/useDialogStore.ts`](https://github.com/lukaszborkowski-wq/personit-react-supabase-starter/blob/main/src/shared/components/dialog/useDialogStore.ts)
+- [`shared/components/dialog/index.ts`](https://github.com/lukaszborkowski-wq/personit-react-supabase-starter/blob/main/src/shared/components/dialog/index.ts)
 
-/** Stan wszystkich dialogów po ID. */
-export const useDialogStore = create<DialogStore>((set) => ({
-  dialogs: {},
-  open: (id, payload) => set((s) => ({ dialogs: { ...s.dialogs, [id]: { isOpen: true, payload } } })),
-  // Payload zostaje po zamknięciu – treść nie znika w trakcie animacji
-  close: (id) => set((s) => ({ dialogs: { ...s.dialogs, [id]: { ...s.dialogs[id], isOpen: false } } })),
-}))
-```
+Przykład użycia – tabela książek z menu w wierszu:
 
-```ts title="shared/components/dialog/useDialog.ts"
-import { useCallback } from 'react'
-import { useDialogStore } from './useDialogStore'
-
-/** Otwieranie, zamykanie i stan dialogu o danym ID – z dowolnego komponentu. */
-export function useDialog<P = void>(id: string) {
-  const isOpen = useDialogStore((s) => s.dialogs[id]?.isOpen ?? false)
-  const payload = useDialogStore((s) => s.dialogs[id]?.payload) as P
-
-  const open = useCallback((payload?: P) => useDialogStore.getState().open(id, payload), [id])
-  const close = useCallback(() => useDialogStore.getState().close(id), [id])
-
-  return { isOpen, payload, open, close }
-}
-```
-
-```tsx title="shared/components/dialog/Dialog.tsx"
-import type { ReactNode } from 'react'
-import { Dialog as DialogRoot } from '@/shared/ui/dialog'
-import { useDialog } from './useDialog'
-import { useDialogStore } from './useDialogStore'
-
-type DialogProps<P> = {
-  id: string
-  children: ReactNode | ((args: { payload: P; close: () => void }) => ReactNode)
-}
-
-/**
- * Dialog shadcn sterowany przez useDialog(id). Treść (DialogContent, DialogHeader…) podaje użycie.
- * DialogContent montuje się przy każdym otwarciu, więc formularz w środku startuje od świeżych wartości.
- */
-export function Dialog<P = void>({ id, children }: DialogProps<P>) {
-  const { isOpen, payload, close } = useDialog<P>(id)
-  // Przed pierwszym otwarciem nie ma payloadu – nie wywołujemy jeszcze funkcji z treścią
-  const wasOpened = useDialogStore((s) => id in s.dialogs)
-
-  return (
-    <DialogRoot open={isOpen} onOpenChange={(open) => !open && close()}>
-      {typeof children === 'function' ? wasOpened && children({ payload, close }) : children}
-    </DialogRoot>
-  )
-}
-```
-
-```ts title="shared/components/dialog/index.ts"
-export { Dialog } from './Dialog'
-export { useDialog } from './useDialog'
-```
+- [`modules/books/pages/ShelfPage.tsx`](https://github.com/lukaszborkowski-wq/personit-react-supabase-starter/blob/main/src/modules/books/pages/ShelfPage.tsx)
+- [`modules/books/components/BookList.tsx`](https://github.com/lukaszborkowski-wq/personit-react-supabase-starter/blob/main/src/modules/books/components/BookList.tsx)
+- [`modules/books/components/AddBookDialog.tsx`](https://github.com/lukaszborkowski-wq/personit-react-supabase-starter/blob/main/src/modules/books/components/AddBookDialog.tsx)
+- [`modules/books/components/EditBookDialog.tsx`](https://github.com/lukaszborkowski-wq/personit-react-supabase-starter/blob/main/src/modules/books/components/EditBookDialog.tsx)
+- [`modules/books/components/DeleteBookDialog.tsx`](https://github.com/lukaszborkowski-wq/personit-react-supabase-starter/blob/main/src/modules/books/components/DeleteBookDialog.tsx)
 
 ## Props
 

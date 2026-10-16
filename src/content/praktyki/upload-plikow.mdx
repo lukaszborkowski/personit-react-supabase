@@ -1,0 +1,284 @@
+# Upload plików
+
+Pliki obsługuje jeden moduł – `files`. Udostępnia gotowe pola formularza, które **od razu wysyłają plik do Storage** i zwracają **tylko ID** rekordu z tabeli `files`. Formularz nigdy nie trzyma obiektów `File`, a do bazy domenowej trafiają wyłącznie ID.
+
+```text
+wybór pliku → upload do Storage + wiersz w `files` → pole dostaje ID → formularz wysyła ID → rekord domenowy przypina plik
+```
+
+Pliki, których nic nie przypięło (np. formularz porzucony), usuwa cron po **14 dniach**.
+
+## Jaki problem to rozwiązuje
+
+| Sytuacja | Bez modułu | Z modułem |
+| --- | --- | --- |
+| Nowy formularz, rekordu jeszcze nie ma w bazie, a użytkownik dodaje pliki | nie ma do czego przypiąć pliku – trzeba trzymać `File` w stanie aż do zapisu | plik ląduje w `files` od razu, formularz trzyma tylko ID |
+| Użytkownik dodaje pliki i robi **discard** formularza | pliki zostają w Storage na zawsze i śmiecą | pliki zostają nieprzypięte, cron usuwa je po 14 dniach |
+| Formularz wysyłany razem z plikami w jednym żądaniu | duże żądanie, długie czekanie na „Zapisz”, timeouty, błąd walidacji = upload od nowa | każdy plik leci osobno w tle, „Zapisz” wysyła kilka ID |
+| Edycja – podmiana okładki | stary plik zostaje w Storage | stary plik traci przypięcie i cron go sprząta |
+| Ten sam plik w kilku miejscach | kopiowanie obiektów w Storage | ten sam ID w kilku rekordach |
+
+## Pola formularza
+
+| Komponent | Wartość | Do czego |
+| --- | --- | --- |
+| `FileInput` | `string \| null` | jeden dowolny plik (np. PDF) |
+| `MultiFileInput` | `string[]` | wiele plików |
+| `ImageInput` | `string \| null` | jeden obraz z podglądem |
+| `MultiImageInput` | `string[]` | galeria z podglądem |
+
+Wszystkie mają ten sam kontrakt: `value` i `onChange` operują na ID, więc pasują wprost do `react-hook-form` i do schematu zod.
+
+```tsx title="modules/books/components/BookForm.tsx"
+import { ImageInput, MultiFileInput } from '@/modules/files'
+
+const bookSchema = z.object({
+  title: z.string().min(1),
+  coverFileId: z.string().uuid().nullable(),
+  attachmentIds: z.array(z.string().uuid()),
+})
+
+export function BookForm({ onSubmit }: { onSubmit: (values: BookValues) => void }) {
+  const form = useForm<BookValues>({
+    resolver: zodResolver(bookSchema),
+    defaultValues: { title: '', coverFileId: null, attachmentIds: [] },
+  })
+
+  return (
+    <Form form={form} onSubmit={onSubmit}>
+      <FormInput name="title" label="Tytuł" />
+
+      <FormField
+        name="coverFileId"
+        render={({ field }) => <ImageInput value={field.value} onChange={field.onChange} />}
+      />
+
+      <FormField
+        name="attachmentIds"
+        render={({ field }) => (
+          <MultiFileInput value={field.value} onChange={field.onChange} accept="application/pdf" />
+        )}
+      />
+    </Form>
+  )
+}
+```
+
+„Zapisz” wysyła mały JSON: tytuł i kilka UUID. Pliki są już w Storage, zanim użytkownik kliknie przycisk.
+
+## Baza danych
+
+### Tabela `files`
+
+Każdy plik w Storage ma swój wiersz. Kolumna `attached_at` mówi, czy coś go używa.
+
+```sql title="supabase/migrations/20261016120000_files.sql"
+create table public.files (
+  id          uuid primary key default gen_random_uuid(),
+  bucket      text not null default 'uploads',
+  path        text not null unique,
+  name        text not null,
+  mime_type   text not null,
+  size        bigint not null,
+  created_by  uuid not null default auth.uid() references auth.users (id),
+  created_at  timestamptz not null default now(),
+  attached_at timestamptz            -- null = nikt go nie używa
+);
+
+create index files_orphans_idx on public.files (created_at) where attached_at is null;
+
+alter table public.files enable row level security;
+
+create policy "insert own files" on public.files
+  for insert to authenticated with check (created_by = auth.uid());
+
+create policy "read own files" on public.files
+  for select to authenticated using (created_by = auth.uid());
+
+-- Storage: zalogowany może wgrać plik do bucketu uploads
+create policy "upload to uploads" on storage.objects
+  for insert to authenticated with check (bucket_id = 'uploads');
+```
+
+### Przypinanie plików
+
+Rekordy domenowe trzymają ID z `files`: pojedynczy plik jako kolumnę, wiele plików w tabeli łączącej. O `attached_at` dba **trigger**, więc przypięcie dzieje się w tej samej transakcji co zapis rekordu i nie da się o nim zapomnieć w kodzie frontu.
+
+```sql title="supabase/migrations/20261016120100_books_files.sql"
+alter table public.books
+  add column cover_file_id uuid references public.files (id) on delete set null;
+
+create table public.book_attachments (
+  book_id uuid not null references public.books (id) on delete cascade,
+  file_id uuid not null references public.files (id) on delete cascade,
+  primary key (book_id, file_id)
+);
+
+-- Pojedynczy plik: przypnij nowy, odepnij poprzedni
+create or replace function public.sync_book_cover()
+returns trigger language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_op in ('UPDATE', 'DELETE') and old.cover_file_id is not null then
+    update public.files set attached_at = null where id = old.cover_file_id;
+  end if;
+  if tg_op in ('INSERT', 'UPDATE') and new.cover_file_id is not null then
+    update public.files set attached_at = now() where id = new.cover_file_id;
+  end if;
+  return coalesce(new, old);
+end $$;
+
+create trigger books_cover_files
+  after insert or update of cover_file_id or delete on public.books
+  for each row execute function public.sync_book_cover();
+
+-- Wiele plików: wiersz w tabeli łączącej = przypięcie
+create or replace function public.sync_attachment()
+returns trigger language plpgsql security definer set search_path = '' as $$
+begin
+  update public.files
+     set attached_at = case when tg_op = 'INSERT' then now() else null end
+   where id = coalesce(new.file_id, old.file_id);
+  return coalesce(new, old);
+end $$;
+
+create trigger book_attachments_files
+  after insert or delete on public.book_attachments
+  for each row execute function public.sync_attachment();
+```
+
+<Callout type="info" title="Plik w kilku miejscach">
+  Jeśli ten sam plik może być przypięty do kilku rekordów, zamiast `attached_at` trzymaj licznik `ref_count` (trigger robi `+ 1` / `- 1`), a sierotą jest plik z `ref_count = 0`.
+</Callout>
+
+## Frontend – moduł `files`
+
+```text
+modules/files/
+├─ api/
+│  └─ files.api.ts          # uploadFile, fetchFiles, getFileUrl
+├─ components/
+│  ├─ FileInput.tsx
+│  ├─ ImageInput.tsx
+│  ├─ MultiFileInput.tsx
+│  └─ MultiImageInput.tsx
+├─ queries/
+│  ├─ keys.ts
+│  └─ useFiles.ts           # useFile(id), useFiles(ids) – nazwa, rozmiar, URL
+├─ mutations/
+│  └─ useUploadFile.ts
+├─ index.ts                 # eksportuje tylko pola i hooki odczytu
+└─ types.ts
+```
+
+### Upload
+
+Najpierw wiersz w `files`, potem plik do Storage. Dzięki tej kolejności nigdy nie powstaje obiekt w Storage, o którym baza nic nie wie – jeśli upload się wysypie, zostaje tylko nieprzypięty wiersz, który sprzątnie cron.
+
+```ts title="modules/files/api/files.api.ts"
+const BUCKET = 'uploads'
+
+export async function uploadFile(file: File): Promise<FileRecord> {
+  const id = crypto.randomUUID()
+  const path = `${id}/${sanitizeFileName(file.name)}`
+
+  const { data, error } = await supabase
+    .from('files')
+    .insert({ id, bucket: BUCKET, path, name: file.name, mime_type: file.type, size: file.size })
+    .select()
+    .single()
+  if (error) throw error
+
+  const { error: uploadError } = await supabase.storage.from(BUCKET).upload(path, file)
+  if (uploadError) throw uploadError
+
+  return toFileRecord(data)
+}
+```
+
+### Pole
+
+Pole zarządza uploadem samo: pokazuje postęp i błąd, a do formularza oddaje dopiero gotowe ID.
+
+```tsx title="modules/files/components/ImageInput.tsx"
+type ImageInputProps = {
+  value: string | null
+  onChange: (fileId: string | null) => void
+}
+
+export function ImageInput({ value, onChange }: ImageInputProps) {
+  const upload = useUploadFile()
+  const { data: image } = useFile(value)
+
+  const handleSelect = async (file: File) => {
+    const record = await upload.mutateAsync(file)
+    onChange(record.id)
+  }
+
+  return (
+    <Dropzone accept="image/*" onSelect={handleSelect} disabled={upload.isPending}>
+      {upload.isPending && <Spinner />}
+      {image && <img src={image.url} alt={image.name} />}
+      {value && <Button variant="ghost" onClick={() => onChange(null)}>Usuń</Button>}
+    </Dropzone>
+  )
+}
+```
+
+„Usuń” tylko czyści wartość pola. Pliku nie kasujemy od razu – formularz może jeszcze zostać porzucony, a wtedy stara wartość musi dalej działać. Sprząta cron.
+
+## Cron – czyszczenie nieprzypiętych plików
+
+Raz dziennie Edge Function usuwa pliki nieprzypięte od ponad 14 dni: najpierw obiekty ze Storage, potem wiersze z `files`.
+
+```ts title="supabase/functions/cleanup-files/index.ts"
+const RETENTION_DAYS = 14
+
+Deno.serve(async () => {
+  const supabase = createAdminClient()
+  const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString()
+
+  const { data: orphans, error } = await supabase
+    .from('files')
+    .select('id, bucket, path')
+    .is('attached_at', null)
+    .lt('created_at', cutoff)
+    .limit(1000)
+  if (error) return Response.json({ error: error.message }, { status: 500 })
+
+  for (const [bucket, files] of Object.entries(groupBy(orphans, (f) => f.bucket))) {
+    await supabase.storage.from(bucket).remove(files.map((f) => f.path))
+  }
+  await supabase.from('files').delete().in('id', orphans.map((f) => f.id))
+
+  return Response.json({ removed: orphans.length })
+})
+```
+
+Harmonogram ustawiamy w bazie przez `pg_cron` + `pg_net`:
+
+```sql title="supabase/migrations/20261016120200_cleanup_files_cron.sql"
+select cron.schedule(
+  'cleanup-files',
+  '0 3 * * *',  -- codziennie o 3:00
+  $$
+  select net.http_post(
+    url     := (select decrypted_secret from vault.decrypted_secrets where name = 'project_url') || '/functions/v1/cleanup-files',
+    headers := jsonb_build_object(
+      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key')
+    )
+  );
+  $$
+);
+```
+
+<Callout type="warning" title="Nie kasuj plików SQL-em">
+  Obiekty usuwamy przez Storage API (`storage.from(bucket).remove`), a nie przez `delete from storage.objects`. Usunięcie wiersza w `storage.objects` nie kasuje samego pliku.
+</Callout>
+
+## Podsumowanie
+
+- Pola z modułu `files` zwracają **tylko ID** – formularz nie trzyma plików.
+- Każdy plik w Storage ma **wiersz w `files`**.
+- Przypięcie robi **trigger** na tabeli domenowej, w tej samej transakcji co zapis.
+- Nieprzypięte pliki starsze niż **14 dni** usuwa **cron**.
+- Discard formularza, podmiana pliku i błąd uploadu nie wymagają żadnej dodatkowej obsługi.

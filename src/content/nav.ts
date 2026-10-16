@@ -40,6 +40,12 @@ export const nav: DocGroup[] = [
     ],
   },
   {
+    title: 'Praktyki',
+    pages: [
+      { title: 'Upload plików', path: '/praktyki/upload-plikow', component: lazy(() => import('./praktyki/upload-plikow.mdx')) },
+    ],
+  },
+  {
     title: 'Supabase',
     pages: [
       { title: 'Klient i zmienne środowiskowe', path: '/supabase/klient', soon: true },

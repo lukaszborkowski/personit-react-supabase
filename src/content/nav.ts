@@ -37,11 +37,6 @@ export const nav: DocGroup[] = [
     title: 'Komponenty',
     pages: [
       { title: 'Dialog', path: '/komponenty/dialog', component: lazy(() => import('./komponenty/dialog.mdx')) },
-      {
-        title: 'Upload plików',
-        path: '/komponenty/upload-plikow',
-        component: lazy(() => import('./komponenty/upload-plikow.mdx')),
-      },
     ],
   },
   {
